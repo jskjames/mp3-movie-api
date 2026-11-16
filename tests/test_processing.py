@@ -1,5 +1,7 @@
 import pytest
 
+import main
+
 from src import ProcessConfig
 
 
@@ -15,10 +17,12 @@ def test_processing_error_preserves_data(client, uploaded_movies, processing_bod
     else:
         processing_body['processing']['outliers'].update(enabled=True, method='invalid')
     assert client.post('/movies/process', json=processing_body).status_code == 400
+    assert main.cache.get(100) == before
     assert client.get('/movies').json() == before
 
 
 def test_process_and_repeat(client, uploaded_movies, processing_body):
+    processing_body["processing"]["outliers"]["enabled"] = False
     response = client.post('/movies/process', json=processing_body)
     assert response.status_code == 200
     assert response.json() == {
@@ -41,6 +45,7 @@ def test_numeric_validation_and_nulls(client, processing_body):
     csv = b'title,release_year,rating,genre\nA,2020,8,Drama\nB,2021,unknown,Comedy\nC,2022,,Action\n'
     client.post('/upload', files={'file': ('movies.csv', csv)})
     processing_body['processing']['missing']['enabled'] = False
+    processing_body['processing']['outliers']['enabled'] = False
     response = client.post('/movies/process', json=processing_body)
     assert response.json()['validation_rows_removed'] == 1
     rows = client.get('/movies').json()['data']
@@ -52,6 +57,7 @@ def test_drop_missing_column_keeps_sql_schema(client, processing_body):
     csv = b'title,release_year,rating,genre\nA,2020,8,Drama\nB,2021,,Comedy\n'
     client.post('/upload', files={'file': ('movies.csv', csv)})
     processing_body['processing']['missing']['axis'] = 'columns'
+    processing_body['processing']['outliers']['enabled'] = False
     response = client.post('/movies/process', json=processing_body)
     assert response.status_code == 200
     assert response.json()['cleaning_report']['columns_removed'] == 1

@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import main
-from src import MovieStorage
+from src import MovieCache, MovieStorage
 
 
 @pytest.fixture
@@ -15,6 +15,7 @@ def movie_storage(tmp_path):
 @pytest.fixture
 def client(monkeypatch, movie_storage):
     monkeypatch.setattr(main, "storage", movie_storage)
+    monkeypatch.setattr(main, "cache", MovieCache())
     with TestClient(main.app) as test_client:
         yield test_client
 
@@ -43,6 +44,6 @@ def processing_body():
         "processing": {
             "remove_duplicates": True,
             "missing": {"enabled": True, "axis": "rows"},
-            "outliers": {"enabled": False, "columns": ["rating"], "method": "iqr", "threshold": 1.5},
+            "outliers": {"enabled": True, "columns": ["rating"], "method": "iqr", "threshold": 1.5},
         },
     }

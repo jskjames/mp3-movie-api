@@ -1,6 +1,6 @@
 # MP3 Movie API
 
-DS3500 MP3 Part 1. This project extends the MP2 REST API with a SQLite movie collection. The existing MP1 validation and cleaning functions are copied in `data_pipeline/`.
+This DS3500 project extends the MP2 FastAPI application in `main.py` with SQLite storage and caching. The upload endpoint validates the columns in the movie CSV and replaces the current collection in one transaction. The database and storage modules in `src/` open SQLite connections and run SQL to retrieve, count, filter, and sort movies. The processing endpoint reuses the validation and cleaning functions in `data_pipeline/` and saves the cleaned rows. The cache in `src/cache.py` keeps each `GET /movies` response for 90 seconds using its row limit as part of the key. Successful uploads and processing clear all cached limits so the next retrieval reads the updated records from SQLite. The SQLite collection persists across API restarts, while the in-process cache starts empty.
 
 ## Setup
 
@@ -30,8 +30,8 @@ Open http://127.0.0.1:8000/docs for Swagger UI. The database is created automati
 | --- | --- | --- |
 | GET | `/health` | Application status and version |
 | POST | `/upload` | Validate a movie CSV and replace the collection |
-| GET | `/movies` | Return up to `limit` rows, ordered by id, plus `total_rows` |
-| GET | `/movies/search` | Select movie fields and filter by minimum rating |
+| GET | `/movies` | Return up to `limit` rows, ordered by id, plus `total_rows` (cached) |
+| GET | `/movies/search` | Select movie fields and filter by minimum rating directly in SQLite |
 | POST | `/movies/process` | Validate and clean the stored movies, then save the result |
 
 Uploads must contain at least one row and exactly `title`, `release_year`, `rating`, and `genre`. Column order may vary; storage uses the order above. Missing values become SQL NULL. Uploads retain duplicates until processing is requested.
@@ -52,21 +52,64 @@ Column names are checked against an allowlist before they are used in SQL. Filte
 
 ## Processing
 
-Use the JSON in `fixtures/process_config.json` as the request body for `POST /movies/process`. The sample contains two duplicate rows, so default duplicate removal produces 18 rows. Enabling rating outlier removal with IQR and threshold 1.5 produces 16 rows.
+Upload `fixtures/sample_movies.csv`, then send this JSON to `POST /movies/process` in `/docs`. The same request body is available in `fixtures/process_config.json`.
+
+```json
+{
+  "validation": {
+    "required_columns": ["title", "release_year", "rating", "genre"],
+    "numeric_columns": ["release_year", "rating"]
+  },
+  "processing": {
+    "remove_duplicates": true,
+    "missing": {"enabled": true, "axis": "rows"},
+    "outliers": {
+      "enabled": true,
+      "columns": ["rating"],
+      "method": "iqr",
+      "threshold": 1.5
+    }
+  }
+}
+```
+
+Expected response for the 20-row sample:
+
+```json
+{
+  "validation_rows_removed": 0,
+  "cleaning_report": {
+    "rows_before": 20,
+    "rows_after": 16,
+    "rows_removed": 4,
+    "columns_before": 4,
+    "columns_after": 4,
+    "columns_removed": 0
+  }
+}
+```
 
 The request accepts the same nested configuration as MP2: validation columns, duplicate removal, missing values (`rows` or `columns`), and outlier filtering (`iqr` or `zscore`). Processing an empty collection returns 400. Invalid processing settings return 400 without changing the stored collection. Invalid request types and out-of-range query values return 422.
 
 The movie table always has four data columns. If the reused missing-value cleaning step drops a DataFrame column, the cleaning report describes that step and the corresponding SQL column is saved as NULL for every remaining row.
 
+## Cache demonstration
+
+1. Upload the sample and execute `GET /movies?limit=100` twice. The server logs a miss followed by a hit, and both responses report 20 total rows.
+2. Execute `GET /movies?limit=1`. This limit has its own cache key and logs a miss.
+3. Run the sample processing request above. Execute `GET /movies?limit=100` twice again. Both responses contain 16 rows, with a miss followed by a hit.
+4. Restart Uvicorn. The first retrieval misses the cache and still returns 16 rows from SQLite.
+5. Upload the original sample again. The next retrieval misses the cache and returns 20 rows.
+
 ## Tests
 
 ```powershell
-.\venv\Scripts\python.exe -m pytest -q
+.\venv\Scripts\python.exe -m pytest tests -v
 ```
 
-On macOS/Linux, use `venv/bin/python -m pytest -q`.
+On macOS/Linux, use `venv/bin/python -m pytest tests -v`.
 
-Tests use temporary SQLite databases and cover the sample responses, upload replacement, persistence across storage instances, SQL NULL handling, rollback after a failed insert, search order and field validation, processing, and request logging/error handling.
+Tests use temporary SQLite databases and cover the sample responses, upload replacement, persistence across storage instances, SQL NULL handling, rollback after a failed insert, search order and field validation, processing, request logging and error handling, cache invalidation, and cache hits that skip SQLite reads.
 
 ## Structure
 
@@ -76,6 +119,7 @@ mp3-movie-api/
   requirements.txt
   src/
     __init__.py
+    cache.py
     database.py
     storage.py
     models.py
@@ -95,5 +139,3 @@ mp3-movie-api/
   data/
     movies.db  (generated, ignored by Git)
 ```
-
-Part 2 caching is not included in this Part 1 implementation.

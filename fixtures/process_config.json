@@ -18,7 +18,7 @@
       "axis": "rows"
     },
     "outliers": {
-      "enabled": false,
+      "enabled": true,
       "columns": [
         "rating"
       ],
